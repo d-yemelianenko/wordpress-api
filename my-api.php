@@ -21,6 +21,7 @@ function moje_api_dodaj_css()
     wp_enqueue_style('api-post', plugins_url('assets/css/style.css', __FILE__), array(), '1.0', 'all');
 }
 
+
 register_activation_hook(__FILE__, 'moja_tworzenie_tabel');
 
 function moja_tworzenie_tabel()
@@ -41,7 +42,7 @@ function moja_tworzenie_tabel()
         PRIMARY KEY (id)
     ) $charset;";
 
-    // SQL dla tabeli postacie
+    
     $sql_postacie = "CREATE TABLE {$prefix}postacie (
         id INT NOT NULL AUTO_INCREMENT,
         serial_id INT NOT NULL,
@@ -68,6 +69,12 @@ function moja_tworzenie_tabel()
     dbDelta($sql_seriale);
     dbDelta($sql_postacie);
     dbDelta($sql_cytaty);
+}
+
+function moje_tlumacz($tekst_pl, $tekst_en)
+{
+    $lang = moje_aktualny_jezyk();
+    return ($lang == 'pl') ? $tekst_pl : $tekst_en;
 }
 
 
@@ -143,7 +150,7 @@ function pobierz_wszystkie_seriale($atts)
 
     $atts = shortcode_atts(array('id' => 0), $atts);
 
-    
+
     if ($atts['id'] > 0) {
         $dane = moje_pobierz_seriale($atts['id']);
         if ($dane && (!empty($dane['tytul_pl']) || !empty($dane['tytul_en']))) {
@@ -164,7 +171,7 @@ function pobierz_wszystkie_seriale($atts)
         return '';
     }
 
-    
+
     $seriale = moje_pobierz_wszystkie_seriale();
     if (!$seriale) {
         return '';
@@ -175,14 +182,15 @@ function pobierz_wszystkie_seriale($atts)
         $lang = moje_aktualny_jezyk();
         $tytul = ($lang == 'pl') ? $serial['tytul_pl'] : $serial['tytul_en'];
         $opis = ($lang == 'pl') ? $serial['opis_pl'] : $serial['opis_en'];
+        $url_serialu = home_url('/szczegoly-serialu/?id=' . $serial['id']);
+        $czytaj_wiecej = moje_tlumacz('Czytaj więcej →', 'Read more →');
 
         $wynik .= '<div class="serial-karta">';
         $wynik .= '<img src="' . esc_url($serial['zdjecie']) . '" alt="' . esc_attr($tytul) . '">';
         $wynik .= '<h3>' . esc_html($tytul) . '</h3>';
-        $wynik .= '<p><strong>Rok:</strong> ' . esc_html($serial['rok_premiery']) . '</p>';
-        $wynik .= '<p><strong>Sezony:</strong> ' . esc_html($serial['liczba_sezonow']) . '</p>';
         $wynik .= '<p>' . wp_kses_post(substr($opis, 0, 100)) . '...</p>';
-        $wynik .= '<a href="#" class="czytaj-wiecej">Czytaj więcej →</a>';
+
+        $wynik .= '<a href="' . esc_url($url_serialu) . '" class="czytaj-wiecej">' . esc_html($czytaj_wiecej) . '</a>';
         $wynik .= '</div>';
     }
 
@@ -199,13 +207,78 @@ function moje_rejestruj_endpoint_seriale()
 {
     register_rest_route('moja-api/v1', '/seriale', array(
         'methods' => 'GET',
-        'callback' => 'moje_rest_pobierz_seriale', 
+        'callback' => 'moje_rest_pobierz_seriale',
         'permission_callback' => '__return_true',
     ));
 }
 
 function moje_rest_pobierz_seriale()
 {
-    $seriale = moje_pobierz_wszystkie_seriale(); 
+    $seriale = moje_pobierz_wszystkie_seriale();
     return rest_ensure_response($seriale);
+}
+
+function moje_wyswietl_serial($atts)
+{
+    if (is_admin() || defined('REST_REQUEST')) {
+        return '';
+    }
+
+    $id = isset($atts['id']) ? intval($atts['id']) : 0;
+
+    if ($id == 0 && isset($_GET['id'])) {
+        $id = intval($_GET['id']);
+    }
+
+    if ($id <= 0) {
+        return '';
+    }
+
+    $dane = moje_pobierz_seriale($id);
+
+    if (!$dane) {
+        return '<p>Serial nie znaleziony.</p>';
+    }
+    $lang = moje_aktualny_jezyk();
+
+
+    $tytul = ($lang == 'pl') ? $dane['tytul_pl'] : $dane['tytul_en'];
+    $opis  = ($lang == 'pl') ? $dane['opis_pl'] : $dane['opis_en'];
+    $url_listy = home_url('/');
+    $rok_label = moje_tlumacz('Rok:', 'Year:');
+    $sezony_label = moje_tlumacz('Sezony:', 'Seasons:');
+    $powrot = moje_tlumacz('← Powrót do listy seriali', '← Back to series list');
+
+    $wynik = '<div class="serial-szczegoly">';
+    $wynik .= '<img src="' . esc_url($dane['zdjecie']) . '" alt="' . esc_attr($tytul) . '" class="zdjecie-szczegoly">';
+    $wynik .= '<h1>' . esc_html($tytul) . '</h1>';
+    $wynik .= '<p><strong>' . esc_html($rok_label) . '</strong> ' . esc_html($dane['rok_premiery']) . '</p>';
+    $wynik .= '<p><strong>' . esc_html($sezony_label) . '</strong> ' . esc_html($dane['liczba_sezonow']) . '</p>';
+    $wynik .= '<div>' . wp_kses_post($opis) . '</div>';
+    $wynik .= '<a href="' . esc_url($url_listy) . '" class="powrot-link">' . esc_html($powrot) . '</a>';
+    $wynik .= '</div>';
+
+    return $wynik;
+}
+
+add_shortcode('pokaz_serial', 'moje_wyswietl_serial');
+
+add_filter('the_title', 'moje_zmien_tytul_strony_w_tresci', 10, 2);
+
+function moje_zmien_tytul_strony_w_tresci($title, $post_id)
+{
+    if (is_admin()) return $title;
+
+    $post = get_post($post_id);
+    if ($post && has_shortcode($post->post_content, 'pokaz_serial')) {
+        if (isset($_GET['id']) && intval($_GET['id']) > 0) {
+            $id = intval($_GET['id']);
+            $dane = moje_pobierz_seriale($id);
+            if ($dane) {
+                $lang = moje_aktualny_jezyk();
+                return ($lang == 'pl') ? $dane['tytul_pl'] : $dane['tytul_en'];
+            }
+        }
+    }
+    return $title;
 }
