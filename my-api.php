@@ -1,30 +1,32 @@
 <?php
 
 /**
- * Plugin Name: API
- * Description: Pobiera dane z REST API WordPress i wyświetla je na stronie głównej
+ * Plugin Name: Series Encyclopedia
+ * Description: Custom database tables, REST API, shortcodes for series management with PL/EN support
  * Version: 2.0
  * Author: Daria Yemelianenko
- * 
- * Funkcjonalności:
- * - Cache transient (1 godzina)
- * - Automatyczne czyszczenie cache przy zapisie posta
- * - Bezpieczne wyświetlanie (esc_html, wp_kses_post)
- * - Filtrowanie treści tylko na stronie głównej
  */
 
+if (!defined('ABSPATH')) {
+    exit;
+}
 
-add_action('wp_enqueue_scripts', 'moje_api_dodaj_css');
+define('MS_COOKIE_EXPIRY', 30 * DAY_IN_SECONDS);
 
-function moje_api_dodaj_css()
+function ms_enqueue_public_styles()
 {
     wp_enqueue_style('api-post', plugins_url('assets/css/style.css', __FILE__), array(), '1.0', 'all');
 }
 
+add_action('wp_enqueue_scripts', 'ms_enqueue_public_styles');
 
-register_activation_hook(__FILE__, 'moja_tworzenie_tabel');
-
-function moja_tworzenie_tabel()
+/**
+ * Create database tables on plugin activation
+ *
+ * @since 1.0.0
+ * @return void
+ */
+function ms_create_db()
 {
     global $wpdb;
     $charset = $wpdb->get_charset_collate();
@@ -42,7 +44,7 @@ function moja_tworzenie_tabel()
         PRIMARY KEY (id)
     ) $charset;";
 
-    
+
     $sql_postacie = "CREATE TABLE {$prefix}postacie (
         id INT NOT NULL AUTO_INCREMENT,
         serial_id INT NOT NULL,
@@ -71,53 +73,54 @@ function moja_tworzenie_tabel()
     dbDelta($sql_cytaty);
 }
 
-function moje_tlumacz($tekst_pl, $tekst_en)
-{
-    $lang = moje_aktualny_jezyk();
-    return ($lang == 'pl') ? $tekst_pl : $tekst_en;
-}
+register_activation_hook(__FILE__, 'ms_create_db');
 
-
-function moje_aktualny_jezyk()
+function ms_get_current_language()
 {
 
-    if (isset($_COOKIE['moje_jezyk']) && in_array($_COOKIE['moje_jezyk'], ['pl', 'en'])) {
-        return $_COOKIE['moje_jezyk'];
+    if (isset($_COOKIE['ms_current_language']) && in_array($_COOKIE['ms_current_language'], ['pl', 'en'])) {
+        return $_COOKIE['ms_current_language'];
     }
 
     $locale = get_locale();
     return (strpos($locale, 'pl') !== false) ? 'pl' : 'en';
 }
 
-function moje_przyciski_jezyka()
+function ms_translate_text($tekst_pl, $tekst_en)
 {
-    $aktualny = moje_aktualny_jezyk();
+    $lang = ms_get_current_language();
+    return ($lang == 'pl') ? $tekst_pl : $tekst_en;
+}
+
+function ms_language_switcher()
+{
+    $aktualny = ms_get_current_language();
 
     $klasa_pl = ($aktualny == 'pl') ? 'active' : '';
     $klasa_en = ($aktualny == 'en') ? 'active' : '';
 
     $wynik = '<div class="jezyki"><ul>';
-    $wynik .= '<li><button class="jezyk-btn ' . $klasa_pl . '" data-lang="pl">🇵🇱 Polski</button></li>';
-    $wynik .= '<li><button class="jezyk-btn ' . $klasa_en . '" data-lang="en">🇬🇧 English</button></li>';
+    $wynik .= '<li><button class="jezyk-btn ' . $klasa_pl . '" data-lang="pl">🇵🇱 PL</button></li>';
+    $wynik .= '<li><button class="jezyk-btn ' . $klasa_en . '" data-lang="en">🇬🇧 EN</button></li>';
     $wynik .= '</ul></div>';
 
-    add_action('wp_footer', 'moje_jezyk_js');
+    add_action('wp_footer', 'ms_language_switcher_script');
 
     return $wynik;
 }
-add_shortcode('jezyk', 'moje_przyciski_jezyka');
+add_shortcode('lang', 'ms_language_switcher');
 
-
-function moje_jezyk_js()
+function ms_language_switcher_script()
 {
 ?>
     <script>
         document.addEventListener('DOMContentLoaded', function() {
             const buttons = document.querySelectorAll('.jezyk-btn');
+            const COOKIE_EXPIRY = <?php echo MS_COOKIE_EXPIRY; ?>;
             buttons.forEach(button => {
                 button.addEventListener('click', function() {
                     const lang = this.getAttribute('data-lang');
-                    document.cookie = "moje_jezyk=" + lang + "; path=/; max-age=2592000";
+                    document.cookie = "ms_current_language=" + lang + "; path=/; max-age=" + COOKIE_EXPIRY;
                     location.reload();
                 });
             });
@@ -126,7 +129,7 @@ function moje_jezyk_js()
 <?php
 }
 
-function moje_pobierz_seriale($id)
+function ms_get_series_by_id($id)
 {
     global $wpdb;
     $tabela = $wpdb->prefix . 'seriale';
@@ -134,62 +137,53 @@ function moje_pobierz_seriale($id)
     $sql = $wpdb->prepare("SELECT * FROM {$tabela} WHERE id = %d", $id);
     return $wpdb->get_row($sql, ARRAY_A);
 }
-function moje_pobierz_wszystkie_seriale()
+function ms_get_all_series()
 {
     global $wpdb;
     $tabela = $wpdb->prefix . 'seriale';
     $sql = "SELECT * FROM {$tabela} ORDER BY id ASC";
     return $wpdb->get_results($sql, ARRAY_A);
 }
+function ms_get_series_localized_text($serial)
+{
+    $lang = ms_get_current_language();
 
-function pobierz_wszystkie_seriale($atts)
+    return [
+        'tytul' => ($lang == 'pl') ? $serial['tytul_pl'] : $serial['tytul_en'],
+        'opis' => ($lang == 'pl') ? $serial['opis_pl'] : $serial['opis_en'],
+    ];
+}
+
+function ms_get_series_details_url($serial)
+{
+    return home_url('/szczegoly-serialu/?id=' . $serial['id']);
+}
+
+function ms_shortcode_series_list()
 {
     if (is_admin() || defined('REST_REQUEST')) {
         return '';
     }
 
-    $atts = shortcode_atts(array('id' => 0), $atts);
-
-
-    if ($atts['id'] > 0) {
-        $dane = moje_pobierz_seriale($atts['id']);
-        if ($dane && (!empty($dane['tytul_pl']) || !empty($dane['tytul_en']))) {
-            if (moje_aktualny_jezyk() == 'pl') {
-                $dane['tytul_pl'] = $dane['tytul_pl'];
-                $dane['opis_pl'] = $dane['opis_pl'];
-            } else {
-                $dane['tytul_pl'] = $dane['tytul_en'];
-                $dane['opis_pl'] = $dane['opis_en'];
-            }
-            $wynik = '<div class="api-seriale">';
-            $wynik .= '<h2>' . 'ID serialu: ' . esc_html($dane['id']) . '</h2>';
-            $wynik .= '<h2>' . esc_html($dane['tytul_pl']) . '</h2>';
-            $wynik .= '<div>' . wp_kses_post($dane['opis_pl']) . '</div>';
-            $wynik .= '</div>';
-            return $wynik;
-        }
-        return '';
-    }
-
-
-    $seriale = moje_pobierz_wszystkie_seriale();
+    $seriale = ms_get_all_series();
     if (!$seriale) {
         return '';
     }
 
-    $wynik = '<div class="seriale-lista">';
+    $wynik = '<h1 class="ms-page-title">' . esc_html(ms_translate_text('Encyklopedia seriali', 'Series Encyclopedia')) . '</h1>';
+    $wynik .= '<div class="seriale-lista">';
     foreach ($seriale as $serial) {
-        $lang = moje_aktualny_jezyk();
-        $tytul = ($lang == 'pl') ? $serial['tytul_pl'] : $serial['tytul_en'];
-        $opis = ($lang == 'pl') ? $serial['opis_pl'] : $serial['opis_en'];
-        $url_serialu = home_url('/szczegoly-serialu/?id=' . $serial['id']);
-        $czytaj_wiecej = moje_tlumacz('Czytaj więcej →', 'Read more →');
+        $localized_text = ms_get_series_localized_text($serial);
+        $tytul = $localized_text['tytul'];
+        $opis = $localized_text['opis'];
+        $url_serialu = ms_get_series_details_url($serial);
+        $czytaj_wiecej = ms_translate_text('Czytaj więcej →', 'Read more →');
+        $short_description = wp_trim_words($opis, 15, '...');
 
         $wynik .= '<div class="serial-karta">';
         $wynik .= '<img src="' . esc_url($serial['zdjecie']) . '" alt="' . esc_attr($tytul) . '">';
-        $wynik .= '<h3>' . esc_html($tytul) . '</h3>';
-        $wynik .= '<p>' . wp_kses_post(substr($opis, 0, 100)) . '...</p>';
-
+        $wynik .= '<h2>' . esc_html($tytul) . '</h2>';
+        $wynik .= '<p>' . esc_html($short_description) . '</p>';
         $wynik .= '<a href="' . esc_url($url_serialu) . '" class="czytaj-wiecej">' . esc_html($czytaj_wiecej) . '</a>';
         $wynik .= '</div>';
     }
@@ -197,28 +191,27 @@ function pobierz_wszystkie_seriale($atts)
     return $wynik;
 }
 
+add_shortcode('api_seriale', 'ms_shortcode_series_list');
 
-add_shortcode('api_seriale', 'pobierz_wszystkie_seriale');
-
-
-add_action('rest_api_init', 'moje_rejestruj_endpoint_seriale');
-
-function moje_rejestruj_endpoint_seriale()
+function ms_register_series_endpoint()
 {
     register_rest_route('moja-api/v1', '/seriale', array(
         'methods' => 'GET',
-        'callback' => 'moje_rest_pobierz_seriale',
+        'callback' => 'ms_rest_get_series',
+        // Public data – no authentication required
         'permission_callback' => '__return_true',
     ));
 }
 
-function moje_rest_pobierz_seriale()
+add_action('rest_api_init', 'ms_register_series_endpoint');
+
+function ms_rest_get_series()
 {
-    $seriale = moje_pobierz_wszystkie_seriale();
+    $seriale = ms_get_all_series();
     return rest_ensure_response($seriale);
 }
 
-function moje_wyswietl_serial($atts)
+function ms_shortcode_single_series($atts)
 {
     if (is_admin() || defined('REST_REQUEST')) {
         return '';
@@ -234,20 +227,19 @@ function moje_wyswietl_serial($atts)
         return '';
     }
 
-    $dane = moje_pobierz_seriale($id);
+    $dane = ms_get_series_by_id($id);
 
     if (!$dane) {
         return '<p>Serial nie znaleziony.</p>';
     }
-    $lang = moje_aktualny_jezyk();
-
-
-    $tytul = ($lang == 'pl') ? $dane['tytul_pl'] : $dane['tytul_en'];
-    $opis  = ($lang == 'pl') ? $dane['opis_pl'] : $dane['opis_en'];
+    
+    $localized_text = ms_get_series_localized_text($dane);
+    $tytul = $localized_text['tytul'];
+    $opis = $localized_text['opis'];
     $url_listy = home_url('/');
-    $rok_label = moje_tlumacz('Rok:', 'Year:');
-    $sezony_label = moje_tlumacz('Sezony:', 'Seasons:');
-    $powrot = moje_tlumacz('← Powrót do listy seriali', '← Back to series list');
+    $rok_label = ms_translate_text('Rok:', 'Year:');
+    $sezony_label = ms_translate_text('Sezony:', 'Seasons:');
+    $powrot = ms_translate_text('← Powrót do listy seriali', '← Back to series list');
 
     $wynik = '<div class="serial-szczegoly">';
     $wynik .= '<img src="' . esc_url($dane['zdjecie']) . '" alt="' . esc_attr($tytul) . '" class="zdjecie-szczegoly">';
@@ -261,11 +253,9 @@ function moje_wyswietl_serial($atts)
     return $wynik;
 }
 
-add_shortcode('pokaz_serial', 'moje_wyswietl_serial');
+add_shortcode('pokaz_serial', 'ms_shortcode_single_series');
 
-add_filter('the_title', 'moje_zmien_tytul_strony_w_tresci', 10, 2);
-
-function moje_zmien_tytul_strony_w_tresci($title, $post_id)
+function ms_dynamic_series_title($title, $post_id)
 {
     if (is_admin()) return $title;
 
@@ -273,12 +263,14 @@ function moje_zmien_tytul_strony_w_tresci($title, $post_id)
     if ($post && has_shortcode($post->post_content, 'pokaz_serial')) {
         if (isset($_GET['id']) && intval($_GET['id']) > 0) {
             $id = intval($_GET['id']);
-            $dane = moje_pobierz_seriale($id);
+            $dane = ms_get_series_by_id($id);
             if ($dane) {
-                $lang = moje_aktualny_jezyk();
+                $lang = ms_get_current_language();
                 return ($lang == 'pl') ? $dane['tytul_pl'] : $dane['tytul_en'];
             }
         }
     }
     return $title;
 }
+
+add_filter('the_title', 'ms_dynamic_series_title', 10, 2);
