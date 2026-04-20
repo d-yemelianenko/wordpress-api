@@ -179,15 +179,16 @@ function ms_shortcode_series_list()
         $url_serialu = ms_get_series_details_url($serial);
         $czytaj_wiecej = ms_translate_text('Czytaj więcej →', 'Read more →');
         $short_description = wp_trim_words($opis, 15, '...');
-        $rating = ms_fetch_series_rating($tytul, $serial['rok_premiery']);
+        $rating = ms_fetch_series_rating($serial['tytul_en'], $serial['rok_premiery']);
+        $poster_url = ms_fetch_series_poster($serial['tytul_en'], $serial['rok_premiery']);
 
         $wynik .= '<div class="serial-karta">';
-        $wynik .= '<img src="' . esc_url($serial['zdjecie']) . '" alt="' . esc_attr($tytul) . '">';
-        $wynik .= '<h2>' . esc_html($tytul) . '</h2>';
+        $wynik .= '<div class="karta-zdjecie"><img src="' . esc_url($poster_url) . '" alt="' . esc_attr($tytul) . '"></div>';
+        $wynik .= '<div class="karta-tresc"><h2>' . esc_html($tytul) . '</h2>';
         $wynik .= '<p>⭐ IMDb: ' . esc_html($rating) . '/10</p>';
         $wynik .= '<p>' . esc_html($short_description) . '</p>';
         $wynik .= '<a href="' . esc_url($url_serialu) . '" class="czytaj-wiecej">' . esc_html($czytaj_wiecej) . '</a>';
-        $wynik .= '</div>';
+        $wynik .= '</div></div>';
     }
 
     return $wynik;
@@ -241,10 +242,11 @@ function ms_shortcode_single_series($atts)
     $url_listy = home_url('/');
     $rok_label = ms_translate_text('Rok:', 'Year:');
     $sezony_label = ms_translate_text('Sezony:', 'Seasons:');
+    $poster_url = ms_fetch_series_poster($dane['tytul_en'], $dane['rok_premiery']);
     $powrot = ms_translate_text('← Powrót do listy seriali', '← Back to series list');
 
     $wynik = '<div class="serial-szczegoly">';
-    $wynik .= '<img src="' . esc_url($dane['zdjecie']) . '" alt="' . esc_attr($tytul) . '" class="zdjecie-szczegoly">';
+    $wynik .= '<img src="' . esc_url($poster_url) . '" alt="' . esc_attr($tytul) . '" class="zdjecie-szczegoly">';
     $wynik .= '<h1>' . esc_html($tytul) . '</h1>';
     $wynik .= '<p><strong>' . esc_html($rok_label) . '</strong> ' . esc_html($dane['rok_premiery']) . '</p>';
     $wynik .= '<p><strong>' . esc_html($sezony_label) . '</strong> ' . esc_html($dane['liczba_sezonow']) . '</p>';
@@ -290,7 +292,7 @@ function ms_fetch_series_rating($title, $year)
         return $cached;
     }
 
-    $url = add_query_arg(['t' => $title,'y' => $year,'apikey' => $api_key,], 'http://www.omdbapi.com/');
+    $url = add_query_arg(['t' => $title, 'y' => $year, 'apikey' => $api_key,], 'http://www.omdbapi.com/');
 
     $response = wp_remote_get($url, ['timeout' => 5]);
 
@@ -309,4 +311,38 @@ function ms_fetch_series_rating($title, $year)
     }
 
     return 'Brak oceny';
+}
+
+function ms_fetch_series_poster($title, $year)
+{
+    $api_key = defined('MS_OMDB_API_KEY') ? MS_OMDB_API_KEY : '';
+    if (empty($api_key)) {
+        return 'Brak klucza API';
+    }
+
+    $cache_key = 'omdb_poster_' . sanitize_title($title) . '_' . $year;
+    $cached = get_transient($cache_key);
+    if (false !== $cached) {
+        return $cached;
+    }
+
+    $poster_url = add_query_arg(['t' => $title, 'y' => $year, 'apikey' => $api_key,], 'http://www.omdbapi.com/');
+
+    $response = wp_remote_get($poster_url, ['timeout' => 5]);
+
+    if (is_wp_error($response)) {
+        error_log('OMDB API błąd: ' . $response->get_error_message());
+        return 'Brak postera';
+    }
+
+    $body = wp_remote_retrieve_body($response);
+    $data = json_decode($body, true);
+
+    if (isset($data['Poster']) && $data['Poster'] !== 'N/A') {
+        $poster = $data['Poster'];
+        set_transient($cache_key, $poster, DAY_IN_SECONDS);
+        return $poster;
+    }
+
+    return 'https://via.placeholder.com/300x450?text=Brak+zdjecia';
 }
