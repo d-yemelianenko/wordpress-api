@@ -179,10 +179,12 @@ function ms_shortcode_series_list()
         $url_serialu = ms_get_series_details_url($serial);
         $czytaj_wiecej = ms_translate_text('Czytaj więcej →', 'Read more →');
         $short_description = wp_trim_words($opis, 15, '...');
+        $rating = ms_fetch_series_rating($tytul, $serial['rok_premiery']);
 
         $wynik .= '<div class="serial-karta">';
         $wynik .= '<img src="' . esc_url($serial['zdjecie']) . '" alt="' . esc_attr($tytul) . '">';
         $wynik .= '<h2>' . esc_html($tytul) . '</h2>';
+        $wynik .= '<p>⭐ IMDb: ' . esc_html($rating) . '/10</p>';
         $wynik .= '<p>' . esc_html($short_description) . '</p>';
         $wynik .= '<a href="' . esc_url($url_serialu) . '" class="czytaj-wiecej">' . esc_html($czytaj_wiecej) . '</a>';
         $wynik .= '</div>';
@@ -232,7 +234,7 @@ function ms_shortcode_single_series($atts)
     if (!$dane) {
         return '<p>Serial nie znaleziony.</p>';
     }
-    
+
     $localized_text = ms_get_series_localized_text($dane);
     $tytul = $localized_text['tytul'];
     $opis = $localized_text['opis'];
@@ -274,3 +276,37 @@ function ms_dynamic_series_title($title, $post_id)
 }
 
 add_filter('the_title', 'ms_dynamic_series_title', 10, 2);
+
+function ms_fetch_series_rating($title, $year)
+{
+    $api_key = defined('MS_OMDB_API_KEY') ? MS_OMDB_API_KEY : '';
+    if (empty($api_key)) {
+        return 'Brak klucza API';
+    }
+
+    $cache_key = 'omdb_rating_' . sanitize_title($title) . '_' . $year;
+    $cached = get_transient($cache_key);
+    if (false !== $cached) {
+        return $cached;
+    }
+
+    $url = add_query_arg(['t' => $title,'y' => $year,'apikey' => $api_key,], 'http://www.omdbapi.com/');
+
+    $response = wp_remote_get($url, ['timeout' => 5]);
+
+    if (is_wp_error($response)) {
+        error_log('OMDB API błąd: ' . $response->get_error_message());
+        return 'Brak oceny';
+    }
+
+    $body = wp_remote_retrieve_body($response);
+    $data = json_decode($body, true);
+
+    if (isset($data['imdbRating']) && $data['imdbRating'] !== 'N/A') {
+        $rating = $data['imdbRating'];
+        set_transient($cache_key, $rating, DAY_IN_SECONDS);
+        return $rating;
+    }
+
+    return 'Brak oceny';
+}
